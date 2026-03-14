@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 type IconName =
   | "talk"
   | "photo"
+  | "image"
   | "again"
   | "school"
   | "pharmacy"
@@ -55,6 +56,14 @@ export function Icon({
           <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z" />
           <path d="M8.5 5 10 3.5h4L15.5 5" />
           <circle cx="12" cy="12" r="3.2" />
+        </svg>
+      );
+    case "image":
+      return (
+        <svg {...shared}>
+          <rect x="4" y="5" width="16" height="14" rx="2.2" />
+          <circle cx="9" cy="10" r="1.4" />
+          <path d="m20 15-4-4-4 4-2.4-2.4L4 18" />
         </svg>
       );
     case "again":

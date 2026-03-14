@@ -109,6 +109,13 @@ function Icon({
         <line x1="12" y1="3" x2="12" y2="15" />
       </>
     ),
+    image: (
+      <>
+        <rect x="4" y="5" width="16" height="14" rx="2.2" />
+        <circle cx="9" cy="10" r="1.4" />
+        <path d="m20 15-4-4-4 4-2.4-2.4L4 18" />
+      </>
+    ),
     record: (
       <circle cx="12" cy="12" r="6" fill="currentColor" stroke="none" />
     ),
@@ -246,6 +253,16 @@ export default function Home() {
     setCameraError(null);
   }, []);
 
+  const openUploadView = useCallback(() => {
+    setView("start-upload");
+    setStartStatus("idle");
+    setStartError("");
+    setImagePreview(null);
+    setImageFile(null);
+    setCameraError(null);
+    if (cameraOpen) closeCamera();
+  }, [cameraOpen, closeCamera]);
+
   const captureFromCamera = useCallback(() => {
     const video = cameraVideoRef.current;
     const stream = cameraStreamRef.current;
@@ -271,6 +288,14 @@ export default function Home() {
       0.9
     );
   }, [closeCamera]);
+
+  useEffect(() => {
+    if (view !== "start-upload" || imagePreview || cameraOpen || cameraError) return;
+    const timer = window.setTimeout(() => {
+      void startCamera();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [view, imagePreview, cameraOpen, cameraError, startCamera]);
 
   const startRecording = useCallback(async () => {
     try {
@@ -610,7 +635,7 @@ export default function Home() {
                   <button
                     type="button"
                     className="camera-launch"
-                    onClick={() => setView("start-upload")}
+                    onClick={openUploadView}
                     aria-label="Start with camera"
                   >
                     <span className="camera-launch-icon">
@@ -643,7 +668,7 @@ export default function Home() {
                         key={scenario.id}
                         type="button"
                         className="past-scenario-card"
-                        onClick={() => setView("start-upload")}
+                        onClick={openUploadView}
                       >
                         <img
                           src={scenario.imageSrc}
@@ -719,9 +744,7 @@ export default function Home() {
 
         {view === "start-upload" && (
           <section className="main-card flex flex-1 flex-col gap-4">
-            <p className="text-center text-[var(--foreground)]">
-              Add an image of the situation (e.g. pharmacy, bus, office). Take a photo or choose from gallery.
-            </p>
+
             {!imagePreview ? (
               <div className="flex min-h-[12rem] flex-col gap-3">
                 <input
@@ -736,66 +759,58 @@ export default function Home() {
                       const r = new FileReader();
                       r.onload = () => setImagePreview(r.result as string);
                       r.readAsDataURL(f);
+                      closeCamera();
                     }
                     e.target.value = "";
                   }}
                 />
-                {cameraOpen ? (
-                  <div className="flex flex-col gap-3">
-                    <div className="relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] border border-[var(--line)] bg-black">
-                      <video
-                        ref={cameraVideoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="h-full w-full object-cover"
-                        style={{ transform: "scaleX(-1)" }}
-                      />
-                    </div>
-                    {cameraError && (
-                      <p className="text-center text-sm text-red-600">{cameraError}</p>
+                <div className="flex flex-col gap-3">
+                  <div className="relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] border border-[var(--line)] bg-black">
+                    {cameraOpen ? (
+                      <>
+                        <video
+                          ref={cameraVideoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="h-full w-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          className="absolute bottom-3 left-1/2 inline-flex h-10 min-w-[4.75rem] -translate-x-1/2 items-center justify-center rounded-full border border-white/45 bg-black/68 text-white shadow-[0_10px_24px_rgba(0,0,0,0.38)] backdrop-blur-sm transition hover:bg-black/78 active:scale-[0.98]"
+                          onClick={captureFromCamera}
+                          aria-label="Capture photo"
+                        >
+                          <Icon name="camera" size={20} />
+                        </button>
+                      </>
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center px-4 text-center text-sm font-semibold text-white/80">
+                        {cameraError ? "Camera unavailable." : "Opening camera..."}
+                      </div>
                     )}
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        className="action-button min-h-[3rem] flex-1"
-                        onClick={captureFromCamera}
-                      >
-                        Capture
-                      </button>
-                      <button
-                        type="button"
-                        className="min-h-[3rem] rounded-[var(--radius-btn)] border border-[var(--line)] px-4 text-sm font-medium"
-                        onClick={closeCamera}
-                      >
-                        Cancel
-                      </button>
-                    </div>
                   </div>
-                ) : (
-                <div className="grid grid-cols-2 gap-3">
+                  {cameraError && (
+                    <button
+                      type="button"
+                      className="mx-auto inline-flex min-h-12 w-full max-w-[12rem] items-center justify-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-4 text-sm font-semibold text-[var(--foreground)] shadow-[var(--shadow)] transition hover:bg-[var(--pastel-sky)]/30 active:scale-[0.98]"
+                      onClick={startCamera}
+                      aria-label="Retry camera"
+                    >
+                      <Icon name="camera" size={18} />
+                      <span>Retry camera</span>
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="flex min-h-[10rem] cursor-pointer flex-col items-center justify-center rounded-[var(--radius-card)] border-2 border-dashed border-[var(--line)] bg-[var(--panel)] transition hover:bg-[var(--pastel-sky)]/30"
-                    onClick={startCamera}
-                  >
-                    <Icon name="camera" size={40} className="text-[var(--foreground)]/50" />
-                    <span className="mt-2 text-sm font-semibold text-[var(--foreground)]/70">
-                      Take photo
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="flex min-h-[10rem] cursor-pointer flex-col items-center justify-center rounded-[var(--radius-card)] border-2 border-dashed border-[var(--line)] bg-[var(--panel)] transition hover:bg-[var(--pastel-sky)]/30"
+                    className="mx-auto inline-flex min-h-11 w-full max-w-[10.75rem] items-center justify-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-4 text-sm font-semibold text-[var(--foreground)]/85 shadow-[var(--shadow)] transition hover:bg-[var(--pastel-sky)]/30 active:scale-[0.98]"
                     onClick={() => fileInputRef.current?.click()}
+                    aria-label="Upload image"
                   >
-                    <Icon name="upload" size={40} className="text-[var(--foreground)]/50" />
-                    <span className="mt-2 text-sm font-semibold text-[var(--foreground)]/70">
-                      Choose image
-                    </span>
+                    <Icon name="image" size={18} className="text-[var(--foreground)]/80" />
+                    <span>Upload image</span>
                   </button>
                 </div>
-                )}
               </div>
             ) : (
               <>
