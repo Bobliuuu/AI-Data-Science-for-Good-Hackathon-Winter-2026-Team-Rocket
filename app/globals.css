@@ -16,11 +16,19 @@
   --radius-btn: 1.25rem;
   --tap-scale: 0.98;
   --transition: 0.2s ease;
+  --stage-top: #faf7f0;
+  --stage-bottom: #f5efe6;
+  --card: var(--panel);
+  --text: var(--foreground);
+  --muted: rgba(44, 44, 44, 0.62);
+  --teal: #1a8b7d;
+  --teal-deep: #114f58;
+  --gold: #efb354;
 }
 
 @theme inline {
   --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-foreground: var(--text);
   --font-sans: var(--font-manrope);
   --font-mono: var(--font-geist-mono);
   --font-display: var(--font-fraunces);
@@ -33,16 +41,21 @@
 html,
 body {
   margin: 0;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
 }
 
 body {
-  color: var(--foreground);
+  color: var(--text);
   font-family: var(--font-manrope), sans-serif;
   background:
-    radial-gradient(circle at top, rgba(229, 167, 18, 0.12), transparent 32%),
-    linear-gradient(180deg, #faf7f0 0%, #f5efe6 100%);
+    radial-gradient(circle at top left, rgba(239, 179, 84, 0.24), transparent 28%),
+    radial-gradient(circle at top right, rgba(26, 139, 125, 0.14), transparent 30%),
+    linear-gradient(180deg, var(--stage-top) 0%, var(--stage-bottom) 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
 }
 
 /* Conversation view: stack from top and let middle scroll (override space-evenly) */
@@ -51,9 +64,6 @@ body {
 }
 
 button {
-  border: 0;
-  background: none;
-  color: inherit;
   font: inherit;
 }
 
@@ -611,4 +621,8 @@ button {
   .phone-frame {
     height: min(52rem, calc(100vh - 3rem));
   }
+}
+
+img {
+  object-fit: cover;
 }

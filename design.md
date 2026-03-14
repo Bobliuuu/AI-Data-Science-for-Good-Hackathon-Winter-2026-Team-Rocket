@@ -13,7 +13,7 @@ Use a soft, modern mobile app style with a beige color scheme:
 - warm yellow as the main accent
 - muted pastel secondary accents
 
-Typography should feel friendly and readable. Use clear hierarchy and larger text for important phrases and actions.
+If possible, do not use any text. If there is text, typography should feel friendly and readable. Use clear hierarchy and larger text for important phrases and actions.
 
 # layout
 
