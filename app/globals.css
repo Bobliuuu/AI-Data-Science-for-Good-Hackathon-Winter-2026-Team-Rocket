@@ -157,6 +157,11 @@ button {
     var(--panel);
 }
 
+/* Conversation view: stack from top and let middle scroll (override space-evenly) */
+.main-card.conversation-card {
+  justify-content: flex-start;
+}
+
 .big-start {
   display: flex;
   flex-direction: column;

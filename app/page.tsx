@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 const SCRIPTS_KEY = "talkbridge_scripts";
 const MAX_RECORDINGS = 20;
@@ -19,6 +20,38 @@ export type StoredRecording = {
 };
 
 type View = "home" | "record" | "start-upload" | "conversation" | "recordings";
+
+function renderTextWithHighlights(
+  text: string,
+  errorRanges: { start: number; end: number }[] | undefined
+): React.ReactNode {
+  if (!text) return "\u00A0";
+  if (!Array.isArray(errorRanges) || errorRanges.length === 0) return text;
+  const sorted = [...errorRanges].sort((a, b) => a.start - b.start);
+  const merged: { start: number; end: number }[] = [];
+  for (const r of sorted) {
+    if (r.start >= r.end || r.end > text.length) continue;
+    const last = merged[merged.length - 1];
+    if (last && r.start <= last.end) {
+      last.end = Math.max(last.end, r.end);
+    } else {
+      merged.push({ start: r.start, end: r.end });
+    }
+  }
+  const out: React.ReactNode[] = [];
+  let pos = 0;
+  for (const r of merged) {
+    if (r.start > pos) out.push(text.slice(pos, r.start));
+    out.push(
+      <span key={`${r.start}-${r.end}`} style={{ color: "#b91c1c", textDecoration: "underline" }}>
+        {text.slice(r.start, r.end)}
+      </span>
+    );
+    pos = r.end;
+  }
+  if (pos < text.length) out.push(text.slice(pos));
+  return out;
+}
 
 function Icon({
   name,
@@ -128,7 +161,7 @@ export default function Home() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [conversation, setConversation] = useState<
-    { role: "agent" | "user"; text: string }[]
+    { role: "agent" | "user"; text: string; errorRanges?: { start: number; end: number }[] }[]
   >([]);
   const [agentLine, setAgentLine] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -252,9 +285,9 @@ export default function Home() {
 
     const stopped = new Promise<void>((resolve) => {
       const prevOnStop = mr.onstop;
-      mr.onstop = () => {
-        prevOnStop?.();
-        resolve();
+      mr.onstop = function (e) {
+        prevOnStop?.call(mr, e);
+        resolve(undefined);
       };
     });
     mr.stop();
@@ -338,6 +371,7 @@ export default function Home() {
               imageMimeType: mime,
               userInfo,
               scenarioContext: selectedCategory || undefined,
+              conversationHistory: [],
             }),
           });
         })(),
@@ -367,10 +401,14 @@ export default function Home() {
       }
 
       const scenario = await scenarioRes.json();
-      setAgentLine(scenario.voiceAgentLine ?? "");
-      setSuggestions(Array.isArray(scenario.suggestedUserResponses) ? scenario.suggestedUserResponses : []);
-      setConversation([{ role: "agent", text: scenario.voiceAgentLine ?? "" }]);
-      setStartStatus("ready");
+      const voiceLine = scenario?.voiceAgentLine ?? "";
+      const suggested = Array.isArray(scenario?.suggestedUserResponses) ? scenario.suggestedUserResponses : [];
+      flushSync(() => {
+        setAgentLine(voiceLine);
+        setSuggestions(suggested);
+        setConversation([{ role: "agent", text: voiceLine }]);
+        setStartStatus("ready");
+      });
       setView("conversation");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Something went wrong";
@@ -397,14 +435,52 @@ export default function Home() {
     }
   }, [agentLine]);
 
+  const playLine = useCallback(async (text: string) => {
+    if (!text || typeof text !== "string") return;
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      const audio = new Audio(`data:${data.mimeType};base64,${data.audioBase64}`);
+      await audio.play();
+    } catch (e) {
+      console.error("TTS play failed", e);
+    }
+  }, []);
+
+  const fetchErrorRanges = useCallback((text: string) => {
+    fetch("/api/check-words", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data?.ranges)) {
+          setConversation((c) => {
+            const next = [...c];
+            const last = next[next.length - 1];
+            if (last?.role === "user" && last?.text === text) {
+              next[next.length - 1] = { ...last, errorRanges: data.ranges };
+            }
+            return next;
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const pickSuggestion = useCallback(
     async (text: string) => {
       const currentConversation = conversationRef.current;
       const newHistory = [...currentConversation, { role: "user" as const, text }];
       setConversation(newHistory);
-      setSuggestions([]);
-      setAgentLine("");
       setConversationError(null);
+      fetchErrorRanges(text);
       try {
         const recordings = getStoredRecordings();
         const res = await fetch("/api/scenario", {
@@ -413,7 +489,7 @@ export default function Home() {
           body: JSON.stringify({
             userInfo: { recordings },
             scenarioContext: selectedCategory || undefined,
-            conversationHistory: newHistory,
+            conversationHistory: newHistory.map(({ role, text }) => ({ role, text })),
           }),
         });
         const raw = await res.text();
@@ -429,10 +505,17 @@ export default function Home() {
           console.error("[pickSuggestion] API error", res.status, errMsg);
           return;
         }
-        const data = JSON.parse(raw) as { voiceAgentLine?: string; suggestedUserResponses?: string[] };
-        const agentText = data.voiceAgentLine ?? "";
+        let data: { voiceAgentLine?: string; suggestedUserResponses?: string[] };
+        try {
+          data = JSON.parse(raw) as { voiceAgentLine?: string; suggestedUserResponses?: string[] };
+        } catch {
+          setConversationError("Invalid response from server");
+          return;
+        }
+        const agentText = data?.voiceAgentLine ?? "";
+        const nextSuggestions = Array.isArray(data?.suggestedUserResponses) ? data.suggestedUserResponses : [];
         setAgentLine(agentText);
-        setSuggestions(Array.isArray(data.suggestedUserResponses) ? data.suggestedUserResponses : []);
+        setSuggestions(nextSuggestions);
         setConversation((c) => [...c, { role: "agent", text: agentText }]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Something went wrong";
@@ -440,7 +523,7 @@ export default function Home() {
         console.error("[pickSuggestion] Error:", e);
       }
     },
-    [conversation, selectedCategory]
+    [conversation, selectedCategory, fetchErrorRanges]
   );
 
   useEffect(() => {
@@ -746,58 +829,99 @@ export default function Home() {
         )}
 
         {view === "conversation" && (
-          <section className="main-card flex flex-1 flex-col gap-4 overflow-auto">
+          <section
+            className="main-card conversation-card flex min-h-0 flex-1 flex-col gap-3 overflow-hidden"
+            style={{ justifyContent: "flex-start", minHeight: "50vh" }}
+          >
             {conversationError && (
-              <div className="rounded-[var(--radius-btn)] border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              <div className="shrink-0 rounded-[var(--radius-btn)] border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                 {conversationError}
               </div>
             )}
-            <div className="space-y-2">
-              {conversation.map((m, i) => (
-                <div
-                  key={i}
-                  className={`rounded-[var(--radius-btn)] px-3 py-2 text-sm ${
-                    m.role === "agent"
-                      ? "bg-[var(--pastel-mint)]/60 text-[var(--foreground)]"
-                      : "ml-4 bg-[var(--pastel-sky)]/50 text-[var(--foreground)]"
-                  }`}
-                >
-                  {m.text}
-                </div>
-              ))}
-            </div>
-            {agentLine && (
-              <div className="flex flex-col gap-3">
-                <button
-                  type="button"
-                  className="action-button min-h-[3.5rem] w-full"
-                  onClick={playAgentLine}
-                  aria-label="Play agent line"
-                >
-                  <span className="action-icon">
-                    <Icon name="play" size={22} />
-                  </span>
-                  Listen
-                </button>
-                <p className="text-[var(--foreground)]/80">{agentLine}</p>
+            <div
+              className="flex-1 overflow-y-auto overflow-x-hidden"
+              style={{ minHeight: 0, flex: "1 1 0%" }}
+            >
+              <div className="space-y-2 pb-2" style={{ color: "#2c2c2c", minHeight: "80px" }}>
+                {Array.isArray(conversation) &&
+                  conversation.map((m, i) => {
+                    const role = m?.role === "user" ? "user" : "agent";
+                    const text = typeof m?.text === "string" ? m.text : "";
+                    const content =
+                      role === "user" && m?.errorRanges
+                        ? renderTextWithHighlights(text, m.errorRanges)
+                        : (text || "\u00A0");
+                    return (
+                      <div
+                        key={i}
+                        className={
+                          role === "agent"
+                            ? "rounded-[var(--radius-btn)] bg-[var(--pastel-mint)]/60 px-3 py-2 text-sm"
+                            : "ml-4 rounded-[var(--radius-btn)] bg-[var(--pastel-sky)]/50 px-3 py-2 text-sm"
+                        }
+                        style={{ color: "#2c2c2c" }}
+                      >
+                        {content}
+                      </div>
+                    );
+                  })}
+                {(() => {
+                  const displayLine =
+                    (agentLine != null && String(agentLine).trim() !== ""
+                      ? agentLine
+                      : (Array.isArray(conversation)
+                          ? (() => {
+                              const last = [...conversation].reverse().find((m) => m?.role === "agent");
+                              return typeof last?.text === "string" ? last.text : "";
+                            })()
+                          : "")) ?? "";
+                  if (displayLine.trim() === "") return null;
+                  return (
+                    <div className="mt-3 flex flex-col gap-3">
+                      <button
+                        type="button"
+                        className="action-button min-h-[3.5rem] w-full"
+                        onClick={() => playLine(displayLine)}
+                        aria-label="Play agent line"
+                      >
+                        <span className="action-icon">
+                          <Icon name="play" size={22} />
+                        </span>
+                        Listen
+                      </button>
+                      <p style={{ color: "#2c2c2c" }}>{displayLine}</p>
+                    </div>
+                  );
+                })()}
+                {Array.isArray(suggestions) && suggestions.length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-sm font-semibold" style={{ color: "#2c2c2c" }}>
+                      You could say something like:
+                    </p>
+                    <ul className="mt-1 space-y-1 text-sm">
+                      {suggestions.map((s, idx) => (
+                        <li
+                          key={idx}
+                          className="rounded-[var(--radius-btn)] border border-[var(--line)] bg-[var(--panel)] px-3 py-2"
+                          style={{ color: "#2c2c2c" }}
+                        >
+                          {typeof s === "string" ? s : String(s)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(!Array.isArray(conversation) || conversation.length === 0) &&
+                  (agentLine == null || String(agentLine).trim() === "") &&
+                  (!Array.isArray(suggestions) || suggestions.length === 0) && (
+                    <p className="py-4 text-sm opacity-80" style={{ color: "#2c2c2c" }}>
+                      Conversation will appear here.
+                    </p>
+                  )}
               </div>
-            )}
-            <div className="mt-auto flex flex-col gap-3">
-              {suggestions.length > 0 && (
-                <>
-                  <p className="text-sm font-semibold text-[var(--foreground)]/70">
-                    You could say something like:
-                  </p>
-                  <ul className="space-y-1 text-sm text-[var(--foreground)]/80">
-                    {suggestions.map((s) => (
-                      <li key={s} className="rounded-[var(--radius-btn)] border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
-                        {s}
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-              <p className="text-sm font-semibold text-[var(--foreground)]/70">
+            </div>
+            <div className="shrink-0 flex flex-col gap-2 border-t border-[var(--line)] pt-3" style={{ color: "#2c2c2c" }}>
+              <p className="text-sm font-semibold">
                 Record your response:
               </p>
               {!recording ? (
@@ -829,7 +953,7 @@ export default function Home() {
                 </button>
               )}
               {transcribeStatus === "loading" && (
-                <p className="text-center text-sm text-[var(--foreground)]/70">Transcribing…</p>
+                <p className="text-center text-sm text-[var(--foreground)]">Transcribing…</p>
               )}
             </div>
           </section>

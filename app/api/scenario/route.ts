@@ -96,8 +96,8 @@ export async function POST(req: NextRequest) {
       conversationHistory,
       scenarioContext,
     };
-    // LangGraph 1.x state expects OverwriteValue wrappers; cast to satisfy invoke() input type
-    const result = await graph.invoke(input as unknown as Parameters<typeof graph.invoke>[0]);
+    // LangGraph 1.x state uses internal OverwriteValue types; cast so TS accepts our plain object
+    const result = await graph.invoke(input as never);
 
     return NextResponse.json({
       voiceAgentLine: result.voiceAgentLine ?? "",
@@ -108,30 +108,18 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const message =
       e instanceof Error ? e.message : typeof e === "string" ? e : "Generation failed";
-    const cause = e instanceof Error && e.cause instanceof Error ? e.cause.message : undefined;
-    const full = cause ? `${message}: ${cause}` : message;
     console.error("scenario API error", e);
     if (e instanceof Error && e.stack) console.error(e.stack);
 
-    const isFilesystemError =
-      typeof message === "string" &&
-      (message.includes("filesystem") || message.includes("illegal path"));
-    if (isFilesystemError) {
-      try {
-        const fallback = await fallbackSingleCall(body);
-        return NextResponse.json(fallback);
-      } catch (fallbackErr) {
-        console.error("scenario fallback error", fallbackErr);
-        return NextResponse.json(
-          { error: fallbackErr instanceof Error ? fallbackErr.message : "Generation failed" },
-          { status: 500 }
-        );
-      }
+    try {
+      const fallback = await fallbackSingleCall(body);
+      return NextResponse.json(fallback);
+    } catch (fallbackErr) {
+      console.error("scenario fallback error", fallbackErr);
+      return NextResponse.json(
+        { error: fallbackErr instanceof Error ? fallbackErr.message : "Generation failed" },
+        { status: 500 }
+      );
     }
-
-    return NextResponse.json(
-      { error: full || "Generation failed" },
-      { status: 500 }
-    );
   }
 }

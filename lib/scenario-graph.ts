@@ -275,8 +275,9 @@ Output structure:
 
 The plannerAgent field must contain valid JSON only in this form:
 {"agentLine":"...", "suggestions":["...", "..."]}
-conversation_history:
-${state.conversation_history}`;
+
+Conversation so far:
+${state.conversationHistory?.length ? state.conversationHistory.map((m: ConversationTurn) => `${m.role}: ${m.text}`).join("\n") : "(none)"}`;
   const res = await llm.invoke([
     new HumanMessage(`Orchestrated context:\n${state.orchestratedContext}\n\n${prompt}`),
   ]);
@@ -284,15 +285,25 @@ ${state.conversation_history}`;
   const parsed = (() => {
     try {
       const m = raw.match(/\{[\s\S]*\}/);
-      return m ? (JSON.parse(m[0]) as { agentLine?: string; suggestions?: string[] }) : {};
+      if (!m) return { agentLine: "", suggestions: [] as string[] };
+      const obj = JSON.parse(m[0]) as {
+        plannerAgent?: { agentLine?: string; suggestions?: string[] };
+        agentLine?: string;
+        suggestions?: string[];
+      };
+      const fromNested = obj.plannerAgent;
+      return {
+        agentLine: fromNested?.agentLine ?? obj.agentLine ?? "",
+        suggestions: Array.isArray(fromNested?.suggestions) ? fromNested.suggestions : Array.isArray(obj.suggestions) ? obj.suggestions : [],
+      };
     } catch {
-      return {};
+      return { agentLine: "", suggestions: [] as string[] };
     }
   })();
   const out = {
     plan: raw,
-    voiceAgentLine: parsed.agentLine ?? "",
-    suggestedUserResponses: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
+    voiceAgentLine: parsed.agentLine.trim() || "",
+    suggestedUserResponses: parsed.suggestions,
   };
   logAgentEnd("planner", out);
   return out;
@@ -330,14 +341,23 @@ ${state.plan}`;
   const parsed = (() => {
     try {
       const m = raw.match(/\{[\s\S]*\}/);
-      return m ? (JSON.parse(m[0]) as { voiceAgentLine?: string; suggestedUserResponses?: string[] }) : {};
+      if (m) {
+        const obj = JSON.parse(m[0]) as { voiceAgentLine?: string; suggestedUserResponses?: string[] };
+        return {
+          voiceAgentLine: typeof obj.voiceAgentLine === "string" ? obj.voiceAgentLine : "",
+          suggestedUserResponses: Array.isArray(obj.suggestedUserResponses) ? obj.suggestedUserResponses : [],
+        };
+      }
     } catch {
-      return {};
+      /* fall through */
     }
+    return { voiceAgentLine: "", suggestedUserResponses: [] as string[] };
   })();
+  const plainRaw = raw.replace(/^```\w*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+  const textLine = parsed.voiceAgentLine.trim() || plainRaw;
   const out = {
-    voiceAgentLine: parsed.voiceAgentLine ?? state.voiceAgentLine ?? "",
-    suggestedUserResponses: Array.isArray(parsed.suggestedUserResponses)
+    voiceAgentLine: textLine || (state.voiceAgentLine ?? ""),
+    suggestedUserResponses: Array.isArray(parsed.suggestedUserResponses) && parsed.suggestedUserResponses.length > 0
       ? parsed.suggestedUserResponses
       : state.suggestedUserResponses ?? [],
   };
@@ -429,8 +449,8 @@ Suggested responses: ${JSON.stringify(state.suggestedUserResponses ?? [])}`;
     if (m) {
       const parsed = JSON.parse(m[0]) as { voiceAgentLine?: string; suggestedUserResponses?: string[] };
       const out = {
-        voiceAgentLine: parsed.voiceAgentLine ?? state.voiceAgentLine ?? "",
-        suggestedUserResponses: Array.isArray(parsed.suggestedUserResponses)
+        voiceAgentLine: (typeof parsed.voiceAgentLine === "string" ? parsed.voiceAgentLine : "") || (state.voiceAgentLine ?? ""),
+        suggestedUserResponses: Array.isArray(parsed.suggestedUserResponses) && parsed.suggestedUserResponses.length > 0
           ? parsed.suggestedUserResponses
           : state.suggestedUserResponses ?? [],
       };
@@ -440,8 +460,12 @@ Suggested responses: ${JSON.stringify(state.suggestedUserResponses ?? [])}`;
   } catch {
     /* use state as-is */
   }
-  logAgentEnd("feedback", { voiceAgentLine: state.voiceAgentLine, suggestedUserResponses: state.suggestedUserResponses });
-  return {};
+  const passThrough = {
+    voiceAgentLine: state.voiceAgentLine ?? "",
+    suggestedUserResponses: state.suggestedUserResponses ?? [],
+  };
+  logAgentEnd("feedback", passThrough);
+  return passThrough;
 }
 
 export function buildScenarioGraph() {
