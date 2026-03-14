@@ -1,10 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Fraunces, Geist_Mono, Manrope } from "next/font/google";
 import PwaRegister from "./pwa-register";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const manrope = Manrope({
+  variable: "--font-manrope",
   subsets: ["latin"],
 });
 
@@ -13,10 +13,16 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
+  subsets: ["latin"],
+});
+
 export const metadata: Metadata = {
-  title: "Voice Bot",
-  description: "Voice assistant web app.",
-  applicationName: "Voice Bot",
+  title: "Talkbridge",
+  description:
+    "A voice-first, image-assisted English learning app for newcomers practicing everyday conversations.",
+  applicationName: "Talkbridge",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -27,13 +33,13 @@ export const metadata: Metadata = {
   },
   appleWebApp: {
     capable: true,
-    title: "Voice Bot",
+    title: "Talkbridge",
     statusBarStyle: "default",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0f172a",
+  themeColor: "#f5efe2",
 };
 
 export default function RootLayout({
@@ -44,7 +50,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${manrope.variable} ${geistMono.variable} ${fraunces.variable} antialiased`}
       >
         <PwaRegister />
         {children}

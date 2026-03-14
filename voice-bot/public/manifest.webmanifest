@@ -1,12 +1,12 @@
 {
-  "name": "Voice Bot",
-  "short_name": "VoiceBot",
-  "description": "Voice assistant web app.",
+  "name": "Talkbridge",
+  "short_name": "Talkbridge",
+  "description": "Voice-first, image-assisted English learning for everyday newcomer conversations.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#f5efe2",
+  "theme_color": "#f5efe2",
   "orientation": "portrait",
   "icons": [
     {
