@@ -789,12 +789,6 @@ export default function Home() {
   }, [pickSuggestion]);
 
   useEffect(() => {
-    if (view === "conversation" && conversation.length > 0) {
-      saveConversationToStorage(conversation, selectedCategory ?? undefined, imagePreview);
-    }
-  }, [view, conversation, selectedCategory, imagePreview]);
-
-  useEffect(() => {
     if (view === "home") refreshSavedConversations();
   }, [view, refreshSavedConversations]);
 
