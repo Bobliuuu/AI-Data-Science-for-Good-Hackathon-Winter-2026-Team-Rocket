@@ -103,7 +103,24 @@ async function imageUnderstandingAgent(state: ScenarioState): Promise<Partial<Sc
         role: "user",
         parts: [
           {
-            text: "Describe this image in 1-3 short sentences for an ESL conversation scenario. Focus on: place, people, and situation (e.g. pharmacy, doctor's office, school, store, bus). Output only the description.",
+            text: `You are an image analysis assistant. When given an image, describe what you see clearly and simply.
+            Output the following in a structured json:
+
+Scene: [One sentence describing the overall setting or situation]
+
+Objects: [List the main objects visible]
+
+Summary: [1–3 short sentences describing the place, time of day, weather and situation in simple language for an ESL conversation scenario]
+
+Rules:
+
+Only describe what you can actually see — do not guess or assume
+
+Focus on common everyday locations (e.g., pharmacy, doctor’s office, school, store, bus) when describing the setting if visible
+
+Use clear and simple English
+
+If you are not confident, return None`,
           },
           { inlineData: { mimeType: state.imageMimeType, data } },
         ],
@@ -174,13 +191,92 @@ ${state.conversationHistory?.length ? `Conversation so far:\n${state.conversatio
 async function plannerAgent(state: ScenarioState): Promise<Partial<ScenarioState>> {
   logAgentStart("planner", state);
   const llm = createModel();
-  const prompt = `You are the Planner agent. Given the orchestrated context, decide the next conversational turn:
+const prompt = `You are a creative scenario writer for English language learners.
 
-1) What the voice agent (e.g. clerk, doctor, driver) should say next—one natural line.
-2) What short phrases (2-4) to suggest for the learner to reply.
+You will receive one JSON input object with this structure:
 
-Output valid JSON only, no markdown:
-{"agentLine":"...", "suggestions":["...", "..."]}`;
+{
+  "learner": {
+    "name": "string — learner's name or 'Unknown'",
+    "background": "string — where they are from and their situation",
+    "english_level": "string — Beginner / Elementary / Intermediate",
+    "strengths": ["string"],
+    "weaknesses": ["string"],
+    "personality": "string — shy / confident / eager / hesitant / etc."
+  },
+  "scene": {
+    "location": "string — where the scenario takes place",
+    "situation": "string — one sentence describing what is happening",
+    "mood": "string — calm / busy / stressful / friendly / etc."
+  },
+  "conversation_partner": {
+    "name": "string — a fitting name for this character",
+    "role": "string — e.g. cashier, doctor, neighbour, coworker",
+    "personality": "string — how they should behave toward the learner",
+    "opening_line": "string — the first thing they say to start the conversation"
+  }
+}
+
+Use the JSON input to generate the next conversational turn between the learner and the conversation partner.
+
+Input meaning:
+- learner: An English as a second language (ESL) learner
+- scene: The location, situation, and mood for the conversation
+- conversation_partner: A patient, friendly native English speaker in this setting
+
+Rules:
+- Keep all language at or below a Canadian Grade 5 reading level
+- The scenario should feel natural and everyday
+- Be concise with no unnecessary detail
+- Use the learner, scene, and conversation_partner fields directly from the input
+- Make the response fit the location, situation, and mood
+- The conversation partner should speak in a kind, simple, natural way, do not use any techincal terms, use terms at the grade 5 level.
+- Only output valid JSON
+- Do not use markdown
+
+Output the following in JSON:
+
+- Scenario Title: One short line describing the situation
+- Plot Summary: 2–4 sentences describing what happens and why they are talking
+- Key Talking Points: A list of useful phrases or vocabulary the ESL learner should use or learn
+- What short phrases (2-4) to suggest for the learner to reply.
+
+Output structure:
+
+{
+  "scenarioTitle": "...",
+  "plotSummary": "...",
+  "keyTalkingPoints": ["...", "..."],
+  "summaryOfPlot": "A short summary that includes the main talking points and important phrases used in this scenario.",
+  "characters": {
+    "learner": {
+      "name": "...",
+      "background": "...",
+      "english_level": "...",
+      "strengths": ["..."],
+      "weaknesses": ["..."],
+      "personality": "..."
+    },
+    "conversation_partner": {
+      "name": "...",
+      "role": "...",
+      "personality": "...",
+      "opening_line": "..."
+    }
+  },
+  "plannerAgent": {
+    "agentLine": "What the conversation partner should say next—one natural line.",
+    "suggestions": [
+      "Short learner reply phrase",
+      "Short learner reply phrase"
+    ]
+  }
+}
+
+The plannerAgent field must contain valid JSON only in this form:
+{"agentLine":"...", "suggestions":["...", "..."]}
+conversation_history:
+${state.conversation_history}`;
   const res = await llm.invoke([
     new HumanMessage(`Orchestrated context:\n${state.orchestratedContext}\n\n${prompt}`),
   ]);
