@@ -616,7 +616,6 @@ export default function Home() {
                     <span className="camera-launch-icon">
                       <Icon name="camera" size={42} />
                     </span>
-                    <span className="camera-launch-title">Open Camera</span>
                   </button>
                   <button
                     type="button"
@@ -630,7 +629,6 @@ export default function Home() {
                     <span className="camera-launch-icon">
                       <Icon name="mic" size={42} />
                     </span>
-                    <span className="camera-launch-title">Recordings</span>
                   </button>
                 </div>
 
