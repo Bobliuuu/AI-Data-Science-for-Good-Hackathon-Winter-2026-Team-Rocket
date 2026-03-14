@@ -104,6 +104,12 @@ function Icon({
     play: (
       <path d="M6 4v16l12-8L6 4z" fill="currentColor" stroke="none" />
     ),
+    pause: (
+      <>
+        <rect x="7" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none" />
+        <rect x="13.5" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none" />
+      </>
+    ),
     upload: (
       <>
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -194,11 +200,14 @@ export default function Home() {
   const [lastTranscript, setLastTranscript] = useState("");
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [sessionImageBase64, setSessionImageBase64] = useState<string | null>(null);
+  const [sessionImageMimeType, setSessionImageMimeType] = useState<string | null>(null);
   const [conversation, setConversation] = useState<
     { role: "agent" | "user"; text: string; errorRanges?: { start: number; end: number }[] }[]
   >([]);
   const [agentLine, setAgentLine] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [agentTurnLoading, setAgentTurnLoading] = useState(false);
   const [startStatus, setStartStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [startError, setStartError] = useState("");
   const [conversationError, setConversationError] = useState<string | null>(null);
@@ -216,6 +225,8 @@ export default function Home() {
   const conversationRef = useRef(conversation);
   const recordingForConversationRef = useRef(false);
   const pickSuggestionRef = useRef<(text: string) => void>(() => {});
+  const lineAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [playingLineKey, setPlayingLineKey] = useState<string | null>(null);
   useEffect(() => {
     conversationRef.current = conversation;
   }, [conversation]);
@@ -270,6 +281,8 @@ export default function Home() {
     setStartError("");
     setImagePreview(null);
     setImageFile(null);
+    setSessionImageBase64(null);
+    setSessionImageMimeType(null);
     setCameraError(null);
     if (cameraOpen) closeCamera();
   }, [cameraOpen, closeCamera]);
@@ -409,6 +422,8 @@ export default function Home() {
         new Uint8Array(buf).reduce((acc, b) => acc + String.fromCharCode(b), "")
       );
       const mime = imageFile.type || "image/jpeg";
+      setSessionImageBase64(base64);
+      setSessionImageMimeType(mime);
 
       const [visionRes, scenarioRes] = await Promise.all([
         fetch("/api/vision", {
@@ -476,38 +491,69 @@ export default function Home() {
     }
   }, [imageFile, selectedCategory]);
 
-  const playAgentLine = useCallback(async () => {
-    if (!agentLine) return;
-    try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: agentLine }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      const audio = new Audio(`data:${data.mimeType};base64,${data.audioBase64}`);
-      await audio.play();
-    } catch (e) {
-      console.error("TTS play failed", e);
-    }
-  }, [agentLine]);
+  const toggleLinePlayback = useCallback(
+    async (text: string, key: string) => {
+      if (!text || typeof text !== "string" || !text.trim()) return;
 
-  const playLine = useCallback(async (text: string) => {
-    if (!text || typeof text !== "string") return;
-    try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: text }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      const audio = new Audio(`data:${data.mimeType};base64,${data.audioBase64}`);
-      await audio.play();
-    } catch (e) {
-      console.error("TTS play failed", e);
-    }
+      const currentAudio = lineAudioRef.current;
+      if (playingLineKey === key && currentAudio && !currentAudio.paused) {
+        currentAudio.pause();
+        lineAudioRef.current = null;
+        setPlayingLineKey(null);
+        return;
+      }
+
+      if (currentAudio) {
+        currentAudio.pause();
+        lineAudioRef.current = null;
+      }
+
+      try {
+        const res = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transcript: text }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+
+        const audio = new Audio(`data:${data.mimeType};base64,${data.audioBase64}`);
+        lineAudioRef.current = audio;
+        setPlayingLineKey(key);
+
+        const clearIfCurrent = () => {
+          if (lineAudioRef.current === audio) {
+            lineAudioRef.current = null;
+            setPlayingLineKey(null);
+          }
+        };
+
+        audio.onended = clearIfCurrent;
+        audio.onerror = clearIfCurrent;
+        audio.onpause = () => {
+          if (!audio.ended) clearIfCurrent();
+        };
+
+        await audio.play();
+      } catch (e) {
+        if (lineAudioRef.current) {
+          lineAudioRef.current.pause();
+          lineAudioRef.current = null;
+        }
+        setPlayingLineKey(null);
+        console.error("TTS play failed", e);
+      }
+    },
+    [playingLineKey]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (lineAudioRef.current) {
+        lineAudioRef.current.pause();
+        lineAudioRef.current = null;
+      }
+    };
   }, []);
 
   const fetchErrorRanges = useCallback((text: string) => {
@@ -538,6 +584,8 @@ export default function Home() {
       const newHistory = [...currentConversation, { role: "user" as const, text }];
       setConversation(newHistory);
       setConversationError(null);
+      setAgentTurnLoading(true);
+      setSuggestions([]);
       fetchErrorRanges(text);
       try {
         const recordings = getStoredRecordings();
@@ -545,6 +593,8 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            imageBase64: sessionImageBase64 ?? undefined,
+            imageMimeType: sessionImageMimeType ?? undefined,
             userInfo: { recordings },
             scenarioContext: selectedCategory || undefined,
             conversationHistory: newHistory.map(({ role, text }) => ({ role, text })),
@@ -579,9 +629,11 @@ export default function Home() {
         const msg = e instanceof Error ? e.message : "Something went wrong";
         setConversationError(msg);
         console.error("[pickSuggestion] Error:", e);
+      } finally {
+        setAgentTurnLoading(false);
       }
     },
-    [conversation, selectedCategory, fetchErrorRanges]
+    [conversation, selectedCategory, fetchErrorRanges, sessionImageBase64, sessionImageMimeType]
   );
 
   useEffect(() => {
@@ -624,9 +676,12 @@ export default function Home() {
                 setStartStatus("idle");
                 setImagePreview(null);
                 setImageFile(null);
+                setSessionImageBase64(null);
+                setSessionImageMimeType(null);
                 setConversation([]);
                 setAgentLine("");
                 setSuggestions([]);
+                setAgentTurnLoading(false);
                 setConversationError(null);
                 setExpandedRecordingId(null);
                 recordingForConversationRef.current = false;
@@ -726,7 +781,6 @@ export default function Home() {
               </button>
             )}
             {transcribeStatus === "loading" && (
-              <p className="text-[var(--foreground)]/70">Transcribing…</p>
             )}
             {transcribeStatus === "done" && (
               <div className="w-full space-y-3">
@@ -848,6 +902,8 @@ export default function Home() {
                         onClick={() => {
                           setImageFile(null);
                           setImagePreview(null);
+                          setSessionImageBase64(null);
+                          setSessionImageMimeType(null);
                         }}
                         aria-label="Change image"
                       >
@@ -886,6 +942,17 @@ export default function Home() {
                 {conversationError}
               </div>
             )}
+            {imagePreview && (
+              <div className="shrink-0">
+                <div className="relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] border border-[var(--line)] bg-[var(--panel)]">
+                  <img
+                    src={imagePreview}
+                    alt="Scenario image"
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+              </div>
+            )}
             <div
               className="flex-1 overflow-y-auto overflow-x-hidden"
               style={{ minHeight: 0, flex: "1 1 0%" }}
@@ -895,6 +962,7 @@ export default function Home() {
                   conversation.map((m, i) => {
                     const role = m?.role === "user" ? "user" : "agent";
                     const text = typeof m?.text === "string" ? m.text : "";
+                    const lineKey = `msg-${i}`;
                     const content =
                       role === "user" && m?.errorRanges
                         ? renderTextWithHighlights(text, m.errorRanges)
@@ -909,60 +977,81 @@ export default function Home() {
                         }
                         style={{ color: "#2c2c2c" }}
                       >
-                        {content}
+                        <div className="flex items-start gap-2">
+                          <div className="min-w-0 flex-1 break-words">{content}</div>
+                          <button
+                            type="button"
+                            className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--line)] text-[var(--foreground)] transition-all duration-150 ${
+                              playingLineKey === lineKey
+                                ? "bg-[var(--accent)] text-white shadow-[0_8px_18px_rgba(53,41,25,0.2)]"
+                                : "bg-white/75 shadow-[0_2px_8px_rgba(53,41,25,0.08)] hover:scale-110 hover:bg-white hover:shadow-[0_10px_20px_rgba(53,41,25,0.16)] active:scale-95"
+                            }`}
+                            onClick={() => toggleLinePlayback(text, lineKey)}
+                            aria-label={playingLineKey === lineKey ? "Pause message audio" : "Play message audio"}
+                            disabled={!text.trim()}
+                          >
+                            <Icon name={playingLineKey === lineKey ? "pause" : "play"} size={14} />
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
-                {(() => {
-                  const displayLine =
-                    (agentLine != null && String(agentLine).trim() !== ""
-                      ? agentLine
-                      : (Array.isArray(conversation)
-                          ? (() => {
-                              const last = [...conversation].reverse().find((m) => m?.role === "agent");
-                              return typeof last?.text === "string" ? last.text : "";
-                            })()
-                          : "")) ?? "";
-                  if (displayLine.trim() === "") return null;
-                  return (
-                    <div className="mt-3 flex flex-col gap-3">
-                      <button
-                        type="button"
-                        className="action-button min-h-[3.5rem] w-full"
-                        onClick={playAgentLine}
-                        aria-label="Play agent line"
-                      >
-                        <span className="action-icon">
-                          <Icon name="play" size={22} />
-                        </span>
-                        Listen
-                      </button>
-                      <p style={{ color: "#2c2c2c" }}>{displayLine}</p>
+                {agentTurnLoading && (
+                  <div className="w-fit rounded-[var(--radius-btn)] bg-[var(--pastel-mint)]/55 px-3 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-2 w-2 rounded-full bg-[var(--foreground)]/45 animate-pulse" />
+                      <span
+                        className="h-2 w-2 rounded-full bg-[var(--foreground)]/45 animate-pulse"
+                        style={{ animationDelay: "120ms" }}
+                      />
+                      <span
+                        className="h-2 w-2 rounded-full bg-[var(--foreground)]/45 animate-pulse"
+                        style={{ animationDelay: "240ms" }}
+                      />
                     </div>
-                  );
-                })()}
+                  </div>
+                )}
                 {Array.isArray(suggestions) && suggestions.length > 0 && (
                   <div className="mt-3">
                     <p className="text-sm font-semibold" style={{ color: "#2c2c2c" }}>
                       You could say something like:
                     </p>
                     <ul className="mt-1 space-y-1 text-sm">
-                      {suggestions.map((s, idx) => (
-                        <li
-                          key={idx}
-                          className="rounded-[var(--radius-btn)] border border-[var(--line)] bg-[var(--panel)]"
-                        >
-                          <button
-                            type="button"
-                            className="w-full px-3 py-2 text-left"
+                      {suggestions.map((s, idx) => {
+                        const suggestionText = typeof s === "string" ? s : String(s);
+                        const suggestionKey = `suggestion-${idx}`;
+                        return (
+                          <li
+                            key={idx}
+                            className="rounded-[var(--radius-btn)] border border-[var(--line)] bg-[var(--panel)] px-2 py-2"
                             style={{ color: "#2c2c2c" }}
-                            onClick={() => playLine(typeof s === "string" ? s : String(s))}
-                            aria-label={`Play suggested response ${idx + 1}`}
                           >
-                            {typeof s === "string" ? s : String(s)}
-                          </button>
-                        </li>
-                      ))}
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                className="min-w-0 flex-1 rounded-lg px-2 py-1 text-left transition hover:bg-white/70 active:scale-[0.99]"
+                                onClick={() => pickSuggestion(suggestionText)}
+                                aria-label={`Use suggestion: ${suggestionText}`}
+                              >
+                                {suggestionText}
+                              </button>
+                              <button
+                                type="button"
+                                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--line)] text-[var(--foreground)] transition-all duration-150 ${
+                                  playingLineKey === suggestionKey
+                                    ? "bg-[var(--accent)] text-white shadow-[0_8px_18px_rgba(53,41,25,0.2)]"
+                                    : "bg-white/75 shadow-[0_2px_8px_rgba(53,41,25,0.08)] hover:scale-110 hover:bg-white hover:shadow-[0_10px_20px_rgba(53,41,25,0.16)] active:scale-95"
+                                }`}
+                                onClick={() => toggleLinePlayback(suggestionText, suggestionKey)}
+                                aria-label={playingLineKey === suggestionKey ? "Pause option audio" : "Play option audio"}
+                                disabled={!suggestionText.trim()}
+                              >
+                                <Icon name={playingLineKey === suggestionKey ? "pause" : "play"} size={14} />
+                              </button>
+                            </div>
+                          </li>
+                        );
+                      })}
                     </ul>
                   </div>
                 )}
@@ -975,36 +1064,30 @@ export default function Home() {
                   )}
               </div>
             </div>
-            <div className="shrink-0 flex flex-col gap-2 border-t border-[var(--line)] pt-3" style={{ color: "#2c2c2c" }}>
-              <p className="text-sm font-semibold">
-                Record your response:
-              </p>
+            <div className="shrink-0 flex flex-col gap-2 border-[var(--line)] pt-3" style={{ color: "#2c2c2c" }}>
+
               {!recording ? (
                 <button
                   type="button"
-                  className="action-button min-h-[3.5rem] w-full"
+                  className="mx-auto inline-flex h-24 w-24 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--panel)] shadow-[0_10px_24px_rgba(53,41,25,0.14)] transition hover:scale-105 hover:shadow-[0_14px_30px_rgba(53,41,25,0.2)] active:scale-95"
                   onClick={() => {
                     recordingForConversationRef.current = true;
                     startRecording();
                   }}
                   aria-label="Record your response"
                 >
-                  <span className="action-icon">
-                    <Icon name="record" size={22} />
-                  </span>
-                  Record
+                  <Icon name="mic" size={38} />
+                  <span className="sr-only">Record</span>
                 </button>
               ) : (
                 <button
                   type="button"
-                  className="action-button min-h-[3.5rem] w-full bg-red-600 text-white hover:bg-red-700"
+                  className="mx-auto inline-flex h-24 w-24 items-center justify-center rounded-full border border-red-600 bg-red-600 text-white shadow-[0_10px_24px_rgba(185,28,28,0.28)] transition hover:scale-105 hover:bg-red-700 active:scale-95"
                   onClick={stopRecording}
                   aria-label="Stop recording"
                 >
-                  <span className="action-icon">
-                    <Icon name="record" size={22} />
-                  </span>
-                  Stop recording
+                  <Icon name="mic" size={38} />
+                  <span className="sr-only">Stop recording</span>
                 </button>
               )}
               {transcribeStatus === "loading" && (
